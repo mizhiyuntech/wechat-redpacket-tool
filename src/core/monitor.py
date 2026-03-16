@@ -523,3 +523,7 @@ class WeChatMonitor:
     @property
     def is_running(self):
         return self._running.is_set()
+
+    @property
+    def window_count(self):
+        return len(self._wechat_windows)

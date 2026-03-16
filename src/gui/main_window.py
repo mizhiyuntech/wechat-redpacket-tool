@@ -162,6 +162,13 @@ class MainWindow(QMainWindow):
         self._stats_timer.timeout.connect(self._stats_widget.refresh)
         self._stats_timer.start(5000)
 
+        # 定时刷新微信状态
+        self._wechat_status_timer = QTimer()
+        self._wechat_status_timer.timeout.connect(self._refresh_wechat_status)
+        self._wechat_status_timer.start(1000)
+
+        self._refresh_wechat_status()
+
     def _toggle(self):
         """开关抢包功能"""
         if self._monitor.is_running:
@@ -174,6 +181,7 @@ class MainWindow(QMainWindow):
         self._config.save()
         self._monitor.start()
         self._update_ui_state(True)
+        self._refresh_wechat_status()
         logger.info("抢包功能已开启")
         self._tray.showMessage("微信抢红包", "自动抢包已开启", QSystemTrayIcon.Information, 2000)
 
@@ -182,6 +190,7 @@ class MainWindow(QMainWindow):
         self._config.save()
         self._monitor.stop()
         self._update_ui_state(False)
+        self._refresh_wechat_status()
         logger.info("抢包功能已停止")
 
     def _update_ui_state(self, running: bool):
@@ -191,6 +200,18 @@ class MainWindow(QMainWindow):
         self._toggle_btn.style().polish(self._toggle_btn)
         self._status_label.setText("运行中" if running else "已停止")
         self._tray.update_status(running)
+
+    def _refresh_wechat_status(self):
+        count = self._monitor.window_count
+        if count > 0:
+            self._wechat_status.setText(f"微信: 已检测 ({count})")
+            self._wechat_status.setStyleSheet("color: #2ecc71; font-size: 13px;")
+        elif self._monitor.is_running:
+            self._wechat_status.setText("微信: 未找到")
+            self._wechat_status.setStyleSheet("color: #f39c12; font-size: 13px;")
+        else:
+            self._wechat_status.setText("微信: 未检测")
+            self._wechat_status.setStyleSheet("color: white; font-size: 13px;")
 
     def _on_redpacket_found(self, info):
         """检测到红包回调 (从工作线程调用，logger已线程安全)"""
