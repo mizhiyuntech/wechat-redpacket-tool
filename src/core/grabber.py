@@ -17,6 +17,7 @@ except ImportError:
 
 class RedPacketGrabber:
     """红包抢夺执行器"""
+    WECHAT_CLASSES = ("WeChatMainWndForPC", "ChatWnd", "mmui::ChatSingleWindow")
 
     def __init__(self, config, statistics, on_grab_success=None):
         self._config = config
@@ -25,6 +26,7 @@ class RedPacketGrabber:
         self._lock = Lock()
         self._grabbed_set = set()
         self._dll = self._load_dll()
+        self._user32 = getattr(ctypes, "windll", None).user32 if os.name == "nt" else None
 
     def _load_dll(self):
         dll_path = os.path.join(os.path.dirname(__file__), "..", "native", "fast_click.dll")
@@ -57,7 +59,58 @@ class RedPacketGrabber:
 
     def _generate_packet_id(self, result: dict) -> str:
         text = result.get("text", "")
-        return f"{text}_{id(result.get('control'))}"
+        chat_name = result.get("chat_name", "")
+        payer = result.get("payer", "")
+        rect_sig = ""
+        control = result.get("control")
+        if control:
+            try:
+                rect = control.BoundingRectangle
+                rect_sig = f"{rect.left},{rect.top},{rect.right},{rect.bottom}"
+            except Exception:
+                pass
+        return f"{chat_name}_{payer}_{text}_{rect_sig}"
+
+    def _enum_window_controls(self, class_name=None):
+        if not self._user32 or not HAS_UIA:
+            return []
+
+        hwnds = []
+        controls = []
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def callback(hwnd, _lparam):
+            try:
+                if not self._user32.IsWindowVisible(hwnd):
+                    return True
+
+                class_buf = ctypes.create_unicode_buffer(256)
+                self._user32.GetClassNameW(hwnd, class_buf, len(class_buf))
+                if class_name:
+                    if isinstance(class_name, (tuple, list, set)):
+                        if class_buf.value not in class_name:
+                            return True
+                    elif class_buf.value != class_name:
+                        return True
+
+                hwnds.append(int(hwnd))
+            except Exception as e:
+                logger.debug("枚举窗口失败: %s", e)
+            return True
+
+        try:
+            self._user32.EnumWindows(enum_proc(callback), 0)
+        except Exception as e:
+            logger.debug("EnumWindows失败: %s", e)
+
+        for hwnd in hwnds:
+            try:
+                ctrl = auto.ControlFromHandle(hwnd)
+                if ctrl:
+                    controls.append(ctrl)
+            except Exception as e:
+                logger.debug("ControlFromHandle失败(%s): %s", hwnd, e)
+        return controls
 
     def grab(self, redpacket_info: dict):
         """执行抢红包操作"""
@@ -85,14 +138,16 @@ class RedPacketGrabber:
             logger.info("等待 %.1f 秒后抢红包...", delay)
             time.sleep(delay)
 
-            if redpacket_info.get("chat_item"):
-                self._click_control(control)
-                time.sleep(0.3)
-                return self._grab_in_current_chat(info)
-
             self._click_control(control)
             time.sleep(0.3)
-            return self._click_open_button(info)
+            if redpacket_info.get("chat_item"):
+                if self._grab_in_current_chat(info):
+                    return True
+                return self._click_open_button(info)
+
+            if self._click_open_button(info):
+                return True
+            return self._grab_in_current_chat(info)
 
         except Exception as e:
             logger.error("抢红包失败: %s", e)
@@ -113,12 +168,13 @@ class RedPacketGrabber:
     def _click_open_button(self, info):
         try:
             time.sleep(0.5)
-            desktop = auto.GetRootControl()
-            for win in desktop.GetChildren():
-                if "红包" in (win.Name or ""):
+            for win in self._enum_window_controls():
+                win_name = win.Name or ""
+                win_class = getattr(win, "ClassName", "") or ""
+                if "红包" in win_name or "Red Packet" in win_name or win_class in self.WECHAT_CLASSES:
                     open_btn = win.ButtonControl(Name="开")
                     if not open_btn.Exists(0, 0):
-                        open_btn = win.ButtonControl(searchDepth=5)
+                        open_btn = win.ButtonControl(searchDepth=8)
                     if open_btn.Exists(0, 0):
                         self._click_control(open_btn)
                         logger.info("成功点击'开'按钮")
@@ -141,18 +197,18 @@ class RedPacketGrabber:
 
     def _grab_in_current_chat(self, info):
         try:
-            desktop = auto.GetRootControl()
-            for win in desktop.GetChildren():
-                if win.ClassName == "WeChatMainWndForPC":
-                    msg_list = win.ListControl(Name="消息")
-                    if msg_list.Exists(0, 0):
-                        children = msg_list.GetChildren()
-                        for item in reversed(children):
-                            name = item.Name or ""
-                            if any(kw in name for kw in ["微信红包", "领取红包"]):
-                                self._click_control(item)
-                                time.sleep(0.3)
-                                return self._click_open_button(info)
+            for win in self._enum_window_controls(class_name=self.WECHAT_CLASSES):
+                msg_list = win.ListControl(Name="消息")
+                if not msg_list.Exists(0, 0):
+                    msg_list = win.ListControl(searchDepth=8)
+                if msg_list.Exists(0, 0):
+                    children = msg_list.GetChildren()
+                    for item in reversed(children):
+                        name = item.Name or ""
+                        if any(kw in name for kw in ["微信红包", "领取红包", "恭喜发财"]):
+                            self._click_control(item)
+                            time.sleep(0.3)
+                            return self._click_open_button(info)
         except Exception as e:
             logger.error("在当前聊天抢红包失败: %s", e)
         return False
