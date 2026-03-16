@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+.eggs/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# PyInstaller
+*.manifest
+*.spec.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+*.dll
+*.exe
+*.obj
+*.o
+*.lib
+*.exp
+
+# Config (user-specific, not tracked)
+# Users generate these locally
+*.log
+
+# Distribution
+dist/
+output/
