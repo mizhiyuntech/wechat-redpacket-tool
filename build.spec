@@ -13,7 +13,7 @@ a = Analysis(
     ] if os.path.exists('src/native/fast_click.dll') else [],
     datas=[
         ('assets', 'assets'),
-    ],
+    ] if os.path.isdir('assets') else [],
     hiddenimports=[
         'uiautomation',
     ],
