@@ -2,12 +2,11 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
     QTableWidgetItem, QPushButton, QHeaderView, QMessageBox, QFrame,
-    QLineEdit, QComboBox, QDateEdit, QFileDialog
+    QLineEdit, QComboBox, QFileDialog
 )
-from PyQt5.QtCore import Qt, QDate
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
 import csv
-import os
 
 
 class StatsCard(QFrame):

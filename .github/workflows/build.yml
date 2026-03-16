@@ -22,14 +22,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Setup MinGW
-        uses: egor-tensin/setup-mingw@v2
-        with:
-          platform: x64
-
-      - name: Build DLL
+      - name: Build DLL with MSVC
         working-directory: src/native
-        run: gcc -shared -O2 -o fast_click.dll fast_click.c -luser32
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cl /LD /O2 fast_click.c user32.lib /Fe:fast_click.dll
 
       - name: Build EXE
         run: pyinstaller build.spec --noconfirm

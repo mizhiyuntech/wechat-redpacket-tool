@@ -2,10 +2,9 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
     QSpinBox, QCheckBox, QTimeEdit, QListWidget, QLineEdit,
-    QPushButton, QLabel, QListWidgetItem, QMessageBox
+    QPushButton, QMessageBox
 )
 from PyQt5.QtCore import Qt, QTime
-from PyQt5.QtGui import QFont
 
 
 class SettingsDialog(QDialog):

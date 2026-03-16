@@ -16,7 +16,6 @@ a = Analysis(
     ],
     hiddenimports=[
         'uiautomation',
-        'PyQt5.QtMultimedia',
     ],
     hookspath=[],
     hooksconfig={},

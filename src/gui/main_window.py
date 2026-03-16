@@ -3,28 +3,32 @@ import logging
 import os
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextEdit, QTabWidget, QFrame, QMessageBox,
-    QSystemTrayIcon
+    QPushButton, QTextEdit, QTabWidget, QFrame,
+    QSystemTrayIcon, QApplication
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QFont, QIcon, QTextCursor
-from PyQt5.QtMultimedia import QSound
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QMetaObject, Q_ARG
 
-from .styles import MAIN_STYLE
-from .settings_dialog import SettingsDialog
-from .statistics_widget import StatisticsWidget
-from .tray_icon import TrayIcon
-from ..core.config import Config
-from ..core.monitor import WeChatMonitor
-from ..core.grabber import RedPacketGrabber
-from ..core.statistics import Statistics
-from ..core.scheduler import Scheduler
+from gui.styles import MAIN_STYLE
+from gui.settings_dialog import SettingsDialog
+from gui.statistics_widget import StatisticsWidget
+from gui.tray_icon import TrayIcon
+from core.config import Config
+from core.monitor import WeChatMonitor
+from core.grabber import RedPacketGrabber
+from core.statistics import Statistics
+from core.scheduler import Scheduler
 
 logger = logging.getLogger(__name__)
 
+try:
+    import winsound
+    HAS_WINSOUND = True
+except ImportError:
+    HAS_WINSOUND = False
+
 
 class LogHandler(logging.Handler):
-    """将日志输出到QTextEdit"""
+    """线程安全的日志Handler，通过invokeMethod转发到GUI线程"""
 
     def __init__(self, text_edit):
         super().__init__()
@@ -32,15 +36,18 @@ class LogHandler(logging.Handler):
 
     def emit(self, record):
         msg = self.format(record)
-        self._text_edit.append(msg)
-        # 自动滚动到底部
-        cursor = self._text_edit.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        self._text_edit.setTextCursor(cursor)
+        QMetaObject.invokeMethod(
+            self._text_edit, "append",
+            Qt.QueuedConnection,
+            Q_ARG(str, msg),
+        )
 
 
 class MainWindow(QMainWindow):
     """主窗口"""
+
+    # 信号: 从工作线程安全地通知GUI线程
+    _grab_success_signal = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -53,13 +60,16 @@ class MainWindow(QMainWindow):
         self._scheduler = Scheduler(self._config)
         self._monitor = WeChatMonitor(self._config, on_redpacket_found=self._on_redpacket_found)
         self._grabber = RedPacketGrabber(
-            self._config, self._statistics, on_grab_success=self._on_grab_success
+            self._config, self._statistics, on_grab_success=self._on_grab_success_from_thread
         )
 
         self._setup_ui()
         self._setup_tray()
         self._setup_log_handler()
         self._setup_timers()
+
+        # 连接信号到GUI线程槽
+        self._grab_success_signal.connect(self._handle_grab_success)
 
         self.setStyleSheet(MAIN_STYLE)
         logger.info("程序初始化完成")
@@ -183,12 +193,16 @@ class MainWindow(QMainWindow):
         self._tray.update_status(running)
 
     def _on_redpacket_found(self, info):
-        """检测到红包回调"""
+        """检测到红包回调 (从工作线程调用，logger已线程安全)"""
         logger.info("检测到红包: %s", info.get("text", ""))
         self._grabber.grab(info)
 
-    def _on_grab_success(self, record):
-        """抢包成功回调"""
+    def _on_grab_success_from_thread(self, record):
+        """抢包成功回调 (从工作线程调用，通过信号转发到GUI线程)"""
+        self._grab_success_signal.emit(record)
+
+    def _handle_grab_success(self, record):
+        """在GUI线程中处理抢包成功 (由信号触发)"""
         logger.info(
             "抢到红包! 金额: %.2f元 | 来源: %s | 付款人: %s",
             record.get("amount", 0), record.get("source", ""), record.get("payer", "")
@@ -204,16 +218,22 @@ class MainWindow(QMainWindow):
         )
 
     def _play_sound(self):
-        """播放提示音"""
+        """播放提示音 (使用Windows原生winsound)"""
         if not self._config.get("sound_enabled", True):
             return
         sound_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "grab_sound.wav")
         sound_path = os.path.abspath(sound_path)
-        if os.path.exists(sound_path):
+        if os.path.exists(sound_path) and HAS_WINSOUND:
             try:
-                QSound.play(sound_path)
+                winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
             except Exception as e:
                 logger.debug("播放提示音失败: %s", e)
+        elif HAS_WINSOUND:
+            # 无自定义音频文件时播放系统提示音
+            try:
+                winsound.MessageBeep(winsound.MB_OK)
+            except Exception:
+                pass
 
     def _check_schedule(self):
         """检查定时调度"""
@@ -237,7 +257,6 @@ class MainWindow(QMainWindow):
 
     def _quit(self):
         self._monitor.stop()
-        from PyQt5.QtWidgets import QApplication
         QApplication.quit()
 
     def closeEvent(self, event):

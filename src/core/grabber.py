@@ -73,8 +73,8 @@ class RedPacketGrabber:
             logger.warning("无效的红包控件")
             return False
 
-        # 保存来源信息，传递给_on_success
-        self._current_info = {
+        # 提取来源信息，通过参数传递（避免实例变量竞争）
+        info = {
             "chat_name": redpacket_info.get("chat_name", ""),
             "payer": redpacket_info.get("payer", ""),
             "remark": redpacket_info.get("remark", ""),
@@ -88,11 +88,11 @@ class RedPacketGrabber:
             if redpacket_info.get("chat_item"):
                 self._click_control(control)
                 time.sleep(0.3)
-                return self._grab_in_current_chat()
+                return self._grab_in_current_chat(info)
 
             self._click_control(control)
             time.sleep(0.3)
-            return self._click_open_button()
+            return self._click_open_button(info)
 
         except Exception as e:
             logger.error("抢红包失败: %s", e)
@@ -110,7 +110,7 @@ class RedPacketGrabber:
             except Exception as e:
                 logger.error("点击控件失败: %s", e)
 
-    def _click_open_button(self):
+    def _click_open_button(self, info):
         try:
             time.sleep(0.5)
             desktop = auto.GetRootControl()
@@ -122,14 +122,14 @@ class RedPacketGrabber:
                     if open_btn.Exists(0, 0):
                         self._click_control(open_btn)
                         logger.info("成功点击'开'按钮")
-                        self._on_success(win)
+                        self._on_success(win, info)
                         return True
 
             open_btn = auto.ButtonControl(Name="开", searchDepth=3)
             if open_btn.Exists(1, 1):
                 self._click_control(open_btn)
                 logger.info("成功点击'开'按钮(备选)")
-                self._on_success(None)
+                self._on_success(None, info)
                 return True
 
             logger.warning("未找到'开'按钮，可能红包已被领完")
@@ -139,7 +139,7 @@ class RedPacketGrabber:
             logger.error("点击'开'按钮失败: %s", e)
             return False
 
-    def _grab_in_current_chat(self):
+    def _grab_in_current_chat(self, info):
         try:
             desktop = auto.GetRootControl()
             for win in desktop.GetChildren():
@@ -152,15 +152,14 @@ class RedPacketGrabber:
                             if any(kw in name for kw in ["微信红包", "领取红包"]):
                                 self._click_control(item)
                                 time.sleep(0.3)
-                                return self._click_open_button()
+                                return self._click_open_button(info)
         except Exception as e:
             logger.error("在当前聊天抢红包失败: %s", e)
         return False
 
-    def _on_success(self, win):
+    def _on_success(self, win, info):
         """抢包成功后处理，记录完整收款信息"""
         amount = 0.0
-        info = getattr(self, "_current_info", {})
         source = info.get("chat_name", "") or "未知来源"
         payer = info.get("payer", "") or "未知"
         remark = info.get("remark", "")

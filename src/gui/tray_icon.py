@@ -1,7 +1,7 @@
 """系统托盘图标"""
-from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction
+from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QApplication
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import pyqtSignal, QObject
+from PyQt5.QtCore import pyqtSignal
 import os
 
 
@@ -21,8 +21,6 @@ class TrayIcon(QSystemTrayIcon):
         if os.path.exists(icon_path):
             self.setIcon(QIcon(icon_path))
         else:
-            # 使用默认应用图标
-            from PyQt5.QtWidgets import QApplication
             self.setIcon(QApplication.style().standardIcon(
                 QApplication.style().SP_ComputerIcon
             ))

@@ -6,6 +6,7 @@
  */
 
 #include <windows.h>
+#include <stdio.h>
 
 /* 快速鼠标点击 */
 __declspec(dllexport) int fast_click(int x, int y) {
