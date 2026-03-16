@@ -20,6 +20,7 @@ class WeChatMonitor:
     """微信窗口监控，检测红包消息"""
 
     RED_PACKET_KEYWORDS = ["微信红包", "[微信红包]", "领取红包", "恭喜发财"]
+    TRANSFER_KEYWORDS = ["微信转账", "[转账]", "转账给你", "请收款", "待收款", "向你转账", "收款"]
     WECHAT_CLASSES = ("WeChatMainWndForPC", "ChatWnd", "mmui::ChatSingleWindow", "mmui::MainWindow")
     MESSAGE_TEXT_CLASSES = ("mmui::ChatTextItemView",)
     SESSION_CELL_CLASS = "mmui::ChatSessionCell"
@@ -151,6 +152,16 @@ class WeChatMonitor:
 
         return payer, remark
 
+    def _detect_event(self, text: str):
+        for kw in self.RED_PACKET_KEYWORDS:
+            if kw in text:
+                return "redpacket", kw
+        if self._config.get("transfer_enabled", True):
+            for kw in self.TRANSFER_KEYWORDS:
+                if kw in text:
+                    return "transfer", kw
+        return None, None
+
     def _is_time_line(self, text: str) -> bool:
         text = (text or "").strip()
         return bool(re.match(r"^\d{1,2}:\d{2}$", text) or re.match(r"^\d{2}/\d{2}$", text))
@@ -236,6 +247,7 @@ class WeChatMonitor:
 
     def _build_result(self, control, item_name, chat_name="", chat_item=True):
         payer, remark = self._extract_sender_from_message(item_name)
+        event_type, keyword = self._detect_event(item_name)
         return {
             "control": self._get_clickable_control(control),
             "text": item_name,
@@ -243,6 +255,8 @@ class WeChatMonitor:
             "chat_name": chat_name,
             "payer": payer,
             "remark": remark,
+            "event_type": event_type or "redpacket",
+            "keyword": keyword or "",
         }
 
     def _scan_visible_tree(self, wechat_window):
@@ -258,7 +272,7 @@ class WeChatMonitor:
                 if not item_name:
                     continue
 
-                matched_kw = next((kw for kw in self.RED_PACKET_KEYWORDS if kw in item_name), None)
+                event_type, matched_kw = self._detect_event(item_name)
                 if not matched_kw and class_name not in self.MESSAGE_TEXT_CLASSES:
                     continue
                 if class_name in self.MESSAGE_TEXT_CLASSES and not matched_kw:
@@ -279,6 +293,7 @@ class WeChatMonitor:
 
                 result = self._build_result(clickable, item_name, chat_name=chat_name, chat_item=True)
                 result["keyword"] = matched_kw
+                result["event_type"] = event_type
                 result["class_name"] = class_name
                 results.append(result)
         except Exception as e:
@@ -311,7 +326,7 @@ class WeChatMonitor:
                     continue
 
                 text = parsed.get("text", "")
-                matched_kw = next((kw for kw in self.RED_PACKET_KEYWORDS if kw in text), None)
+                event_type, matched_kw = self._detect_event(text)
                 if not matched_kw:
                     continue
 
@@ -330,6 +345,7 @@ class WeChatMonitor:
                     "control": clickable,
                     "text": text,
                     "keyword": matched_kw,
+                    "event_type": event_type,
                     "chat_item": True,
                     "chat_name": parsed.get("chat_name", ""),
                     "payer": parsed.get("payer", ""),
@@ -357,7 +373,7 @@ class WeChatMonitor:
                 if not item_name:
                     continue
 
-                matched_kw = next((kw for kw in self.RED_PACKET_KEYWORDS if kw in item_name), None)
+                event_type, matched_kw = self._detect_event(item_name)
                 if not matched_kw:
                     continue
 
@@ -373,6 +389,7 @@ class WeChatMonitor:
 
                 result = self._build_result(clickable, item_name, chat_name=chat_name, chat_item=False)
                 result["keyword"] = matched_kw
+                result["event_type"] = event_type
                 result["class_name"] = "mmui::ChatTextItemView"
                 results.append(result)
         except Exception as e:
@@ -392,13 +409,12 @@ class WeChatMonitor:
 
             for item in msg_list.GetChildren():
                 item_name = item.Name or ""
-                for kw in self.RED_PACKET_KEYWORDS:
-                    if kw in item_name:
-                        payer, remark = self._extract_sender_from_message(item_name)
-                        result = self._build_result(item, item_name, chat_name=chat_name, chat_item=False)
-                        result["keyword"] = kw
-                        results.append(result)
-                        break
+                event_type, kw = self._detect_event(item_name)
+                if kw:
+                    result = self._build_result(item, item_name, chat_name=chat_name, chat_item=False)
+                    result["keyword"] = kw
+                    result["event_type"] = event_type
+                    results.append(result)
         except Exception as e:
             logger.debug("扫描消息失败: %s", e)
         return results
@@ -413,27 +429,25 @@ class WeChatMonitor:
                     return results
             for item in chat_list.GetChildren():
                 item_name = item.Name or ""
-                for kw in self.RED_PACKET_KEYWORDS:
-                    if kw in item_name:
-                        # 聊天列表项：名称就是来源
-                        payer, remark = self._extract_sender_from_message(item_name)
-                        # 从列表项获取群名/联系人名
-                        chat_name = ""
-                        try:
-                            # 列表项的第一个文本控件通常是联系人/群名
-                            name_ctrl = item.TextControl(searchDepth=2)
-                            if name_ctrl and name_ctrl.Exists(0, 0):
-                                chat_name = name_ctrl.Name or ""
-                            if not chat_name:
-                                for child in item.GetChildren():
-                                    child_name = (child.Name or "").strip()
-                                    if child_name and kw not in child_name:
-                                        chat_name = child_name
-                                        break
-                        except Exception:
-                            pass
-                        results.append(self._build_result(item, item_name, chat_name=chat_name, chat_item=True))
-                        break
+                event_type, kw = self._detect_event(item_name)
+                if kw:
+                    chat_name = ""
+                    try:
+                        name_ctrl = item.TextControl(searchDepth=2)
+                        if name_ctrl and name_ctrl.Exists(0, 0):
+                            chat_name = name_ctrl.Name or ""
+                        if not chat_name:
+                            for child in item.GetChildren():
+                                child_name = (child.Name or "").strip()
+                                if child_name and kw not in child_name:
+                                    chat_name = child_name
+                                    break
+                    except Exception:
+                        pass
+                    result = self._build_result(item, item_name, chat_name=chat_name, chat_item=True)
+                    result["keyword"] = kw
+                    result["event_type"] = event_type
+                    results.append(result)
         except Exception as e:
             logger.debug("扫描聊天列表失败: %s", e)
         return results

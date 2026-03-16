@@ -10,6 +10,8 @@ DEFAULT_CONFIG = {
     "enabled": False,
     "delay_min_ms": 500,
     "delay_max_ms": 1500,
+    "transfer_enabled": True,
+    "transfer_delay_ms": 1000,
     "monitored_chats": [],
     "monitor_all_chats": True,
     "sound_enabled": True,

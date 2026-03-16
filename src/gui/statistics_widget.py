@@ -33,8 +33,8 @@ class StatsCard(QFrame):
 class StatisticsWidget(QWidget):
     """收款统计面板组件"""
 
-    COLUMNS = ["来源", "付款人", "付款金额 (元)", "接收时间", "备注"]
-    FIELD_KEYS = ["source", "payer", "amount", "time", "remark"]
+    COLUMNS = ["类型", "来源", "付款人", "付款金额 (元)", "接收时间", "备注"]
+    FIELD_KEYS = ["type", "source", "payer", "amount", "time", "remark"]
 
     def __init__(self, statistics, parent=None):
         super().__init__(parent)
@@ -67,7 +67,7 @@ class StatisticsWidget(QWidget):
         filter_layout.addWidget(QLabel("筛选:"))
 
         self._filter_combo = QComboBox()
-        self._filter_combo.addItems(["全部字段", "来源", "付款人", "备注"])
+        self._filter_combo.addItems(["全部字段", "类型", "来源", "付款人", "备注"])
         self._filter_combo.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self._filter_combo)
 
@@ -84,11 +84,12 @@ class StatisticsWidget(QWidget):
         self._table.setColumnCount(len(self.COLUMNS))
         self._table.setHorizontalHeaderLabels(self.COLUMNS)
         header = self._table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 来源
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 付款人
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # 金额
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 时间
-        header.setSectionResizeMode(4, QHeaderView.Stretch)           # 备注
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 类型
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 来源
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # 付款人
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 金额
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 时间
+        header.setSectionResizeMode(5, QHeaderView.Stretch)           # 备注
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -121,7 +122,7 @@ class StatisticsWidget(QWidget):
         layout.addLayout(btn_layout)
 
     def _on_filter_changed(self, index):
-        field_map = {0: "all", 1: "source", 2: "payer", 3: "remark"}
+        field_map = {0: "all", 1: "type", 2: "source", 3: "payer", 4: "remark"}
         self._filter_field = field_map.get(index, "all")
         self.refresh()
 
@@ -161,9 +162,10 @@ class StatisticsWidget(QWidget):
 
         for i, record in enumerate(reversed(records)):
             # 来源
-            self._table.setItem(i, 0, QTableWidgetItem(record.get("source", "")))
+            self._table.setItem(i, 0, QTableWidgetItem(record.get("type", "红包")))
+            self._table.setItem(i, 1, QTableWidgetItem(record.get("source", "")))
             # 付款人
-            self._table.setItem(i, 1, QTableWidgetItem(record.get("payer", "")))
+            self._table.setItem(i, 2, QTableWidgetItem(record.get("payer", "")))
             # 付款金额
             amount_item = QTableWidgetItem()
             amount = record.get("amount", 0)
@@ -171,11 +173,11 @@ class StatisticsWidget(QWidget):
             amount_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if amount > 0:
                 amount_item.setForeground(QColor("#e74c3c"))
-            self._table.setItem(i, 2, amount_item)
+            self._table.setItem(i, 3, amount_item)
             # 接收时间
-            self._table.setItem(i, 3, QTableWidgetItem(record.get("time", "")))
+            self._table.setItem(i, 4, QTableWidgetItem(record.get("time", "")))
             # 备注
-            self._table.setItem(i, 4, QTableWidgetItem(record.get("remark", "")))
+            self._table.setItem(i, 5, QTableWidgetItem(record.get("remark", "")))
 
         self._table.setSortingEnabled(True)
         self._count_label.setText(f"共 {len(records)} 条记录")
@@ -196,6 +198,7 @@ class StatisticsWidget(QWidget):
                 writer.writerow(self.COLUMNS)
                 for r in records:
                     writer.writerow([
+                        r.get("type", "红包"),
                         r.get("source", ""),
                         r.get("payer", ""),
                         f"{r.get('amount', 0):.2f}",

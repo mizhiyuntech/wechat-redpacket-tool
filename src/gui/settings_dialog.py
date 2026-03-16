@@ -37,6 +37,14 @@ class SettingsDialog(QDialog):
         self._delay_max.setSuffix(" 毫秒")
         grab_layout.addRow("最大延迟:", self._delay_max)
 
+        self._transfer_enabled = QCheckBox("启用普通转账监听/收款")
+        grab_layout.addRow(self._transfer_enabled)
+
+        self._transfer_delay = QSpinBox()
+        self._transfer_delay.setRange(0, 30000)
+        self._transfer_delay.setSuffix(" 毫秒")
+        grab_layout.addRow("延迟收款时间:", self._transfer_delay)
+
         self._check_interval = QSpinBox()
         self._check_interval.setRange(100, 5000)
         self._check_interval.setSuffix(" 毫秒")
@@ -122,6 +130,8 @@ class SettingsDialog(QDialog):
     def _load_config(self):
         self._delay_min.setValue(self._config.get("delay_min_ms", 500))
         self._delay_max.setValue(self._config.get("delay_max_ms", 1500))
+        self._transfer_enabled.setChecked(self._config.get("transfer_enabled", True))
+        self._transfer_delay.setValue(self._config.get("transfer_delay_ms", 1000))
         self._check_interval.setValue(self._config.get("check_interval_ms", 300))
         self._sound_enabled.setChecked(self._config.get("sound_enabled", True))
         self._schedule_enabled.setChecked(self._config.get("schedule_enabled", False))
@@ -166,6 +176,8 @@ class SettingsDialog(QDialog):
         self._config.update({
             "delay_min_ms": self._delay_min.value(),
             "delay_max_ms": self._delay_max.value(),
+            "transfer_enabled": self._transfer_enabled.isChecked(),
+            "transfer_delay_ms": self._transfer_delay.value(),
             "check_interval_ms": self._check_interval.value(),
             "sound_enabled": self._sound_enabled.isChecked(),
             "schedule_enabled": self._schedule_enabled.isChecked(),

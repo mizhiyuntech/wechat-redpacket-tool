@@ -33,7 +33,7 @@ class Statistics:
         except IOError as e:
             logger.error("统计数据保存失败: %s", e)
 
-    def add_record(self, amount: float, source: str, payer: str, remark: str = ""):
+    def add_record(self, amount: float, source: str, payer: str, remark: str = "", record_type: str = "红包"):
         """添加收款记录
 
         Args:
@@ -43,6 +43,7 @@ class Statistics:
             remark: 红包备注（如"恭喜发财"等）
         """
         record = {
+            "type": record_type,
             "source": source,
             "payer": payer,
             "amount": amount,
@@ -52,8 +53,8 @@ class Statistics:
         self._records.append(record)
         self.save()
         logger.info(
-            "收款记录: %.2f元 | 来源: %s | 付款人: %s | 备注: %s",
-            amount, source, payer, remark
+            "收款记录[%s]: %.2f元 | 来源: %s | 付款人: %s | 备注: %s",
+            record_type, amount, source, payer, remark
         )
         return record
 

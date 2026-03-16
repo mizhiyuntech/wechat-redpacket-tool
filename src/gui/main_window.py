@@ -194,7 +194,8 @@ class MainWindow(QMainWindow):
 
     def _on_redpacket_found(self, info):
         """检测到红包回调 (从工作线程调用，logger已线程安全)"""
-        logger.info("检测到红包: %s", info.get("text", ""))
+        event_type = info.get("event_type", "redpacket")
+        logger.info("检测到%s: %s", "转账" if event_type == "transfer" else "红包", info.get("text", ""))
         self._grabber.grab(info)
 
     def _on_grab_success_from_thread(self, record):
@@ -203,14 +204,15 @@ class MainWindow(QMainWindow):
 
     def _handle_grab_success(self, record):
         """在GUI线程中处理抢包成功 (由信号触发)"""
+        record_type = record.get("type", "红包")
         logger.info(
-            "抢到红包! 金额: %.2f元 | 来源: %s | 付款人: %s",
-            record.get("amount", 0), record.get("source", ""), record.get("payer", "")
+            "%s成功! 金额: %.2f元 | 来源: %s | 付款人: %s",
+            record_type, record.get("amount", 0), record.get("source", ""), record.get("payer", "")
         )
         self._play_sound()
         self._stats_widget.refresh()
         self._tray.showMessage(
-            "抢到红包!",
+            f"{record_type}成功!",
             f"金额: {record.get('amount', 0):.2f}元\n"
             f"付款人: {record.get('payer', '未知')}\n"
             f"来源: {record.get('source', '')}",

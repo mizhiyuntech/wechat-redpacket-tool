@@ -4,6 +4,7 @@ import random
 import time
 import ctypes
 import os
+import re
 from threading import Lock
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ except ImportError:
 class RedPacketGrabber:
     """红包抢夺执行器"""
     WECHAT_CLASSES = ("WeChatMainWndForPC", "ChatWnd", "mmui::ChatSingleWindow")
+    RED_PACKET_KEYWORDS = ("微信红包", "领取红包", "恭喜发财")
+    TRANSFER_KEYWORDS = ("微信转账", "转账给你", "请收款", "待收款", "向你转账", "收款")
+    TRANSFER_BUTTON_NAMES = ("收款", "确认收款", "立即收款", "接受转账", "确认", "收下")
 
     def __init__(self, config, statistics, on_grab_success=None):
         self._config = config
@@ -44,6 +48,9 @@ class RedPacketGrabber:
         min_ms = self._config.get("delay_min_ms", 500)
         max_ms = self._config.get("delay_max_ms", 1500)
         return random.randint(min_ms, max_ms) / 1000.0
+
+    def _get_transfer_delay(self):
+        return max(0, self._config.get("transfer_delay_ms", 1000)) / 1000.0
 
     def _fast_click(self, x, y):
         if self._dll:
@@ -113,17 +120,17 @@ class RedPacketGrabber:
         return controls
 
     def grab(self, redpacket_info: dict):
-        """执行抢红包操作"""
+        """执行红包/转账处理"""
         with self._lock:
             packet_id = self._generate_packet_id(redpacket_info)
             if packet_id in self._grabbed_set:
-                logger.debug("红包已处理，跳过: %s", packet_id)
+                logger.debug("消息已处理，跳过: %s", packet_id)
                 return False
             self._grabbed_set.add(packet_id)
 
         control = redpacket_info.get("control")
         if not control:
-            logger.warning("无效的红包控件")
+            logger.warning("无效的消息控件")
             return False
 
         # 提取来源信息，通过参数传递（避免实例变量竞争）
@@ -131,15 +138,30 @@ class RedPacketGrabber:
             "chat_name": redpacket_info.get("chat_name", ""),
             "payer": redpacket_info.get("payer", ""),
             "remark": redpacket_info.get("remark", ""),
+            "event_type": redpacket_info.get("event_type", "redpacket"),
+            "text": redpacket_info.get("text", ""),
         }
 
         try:
-            delay = self._get_delay()
-            logger.info("等待 %.1f 秒后抢红包...", delay)
+            if info["event_type"] == "transfer":
+                delay = self._get_transfer_delay()
+                logger.info("等待 %.1f 秒后收款...", delay)
+            else:
+                delay = self._get_delay()
+                logger.info("等待 %.1f 秒后抢红包...", delay)
             time.sleep(delay)
 
             self._click_control(control)
             time.sleep(0.3)
+            if info["event_type"] == "transfer":
+                if redpacket_info.get("chat_item"):
+                    if self._receive_transfer_in_current_chat(info):
+                        return True
+                    return self._click_receive_transfer_button(info)
+                if self._click_receive_transfer_button(info):
+                    return True
+                return self._receive_transfer_in_current_chat(info)
+
             if redpacket_info.get("chat_item"):
                 if self._grab_in_current_chat(info):
                     return True
@@ -195,6 +217,44 @@ class RedPacketGrabber:
             logger.error("点击'开'按钮失败: %s", e)
             return False
 
+    def _extract_amount_from_texts(self, texts):
+        for text in texts:
+            for match in re.findall(r"(?:¥|￥)?\s*([0-9]+(?:\.[0-9]{1,2})?)\s*元?", text):
+                try:
+                    return float(match)
+                except ValueError:
+                    continue
+        return 0.0
+
+    def _click_receive_transfer_button(self, info):
+        try:
+            time.sleep(0.5)
+            for win in self._enum_window_controls():
+                texts = []
+                try:
+                    for child in win.GetChildren():
+                        if child.Name:
+                            texts.append(child.Name)
+                except Exception:
+                    pass
+                joined = " ".join(texts) + " " + (win.Name or "")
+                if not any(kw in joined for kw in self.TRANSFER_KEYWORDS):
+                    continue
+
+                for btn_name in self.TRANSFER_BUTTON_NAMES:
+                    btn = win.ButtonControl(Name=btn_name)
+                    if not btn.Exists(0, 0):
+                        btn = win.ButtonControl(searchDepth=10, Name=btn_name)
+                    if btn.Exists(0, 0):
+                        self._click_control(btn)
+                        logger.info("成功点击转账收款按钮: %s", btn_name)
+                        self._on_success(win, info)
+                        return True
+            return False
+        except Exception as e:
+            logger.error("点击转账收款按钮失败: %s", e)
+            return False
+
     def _grab_in_current_chat(self, info):
         try:
             for win in self._enum_window_controls(class_name=self.WECHAT_CLASSES):
@@ -213,12 +273,33 @@ class RedPacketGrabber:
             logger.error("在当前聊天抢红包失败: %s", e)
         return False
 
+    def _receive_transfer_in_current_chat(self, info):
+        try:
+            for win in self._enum_window_controls(class_name=self.WECHAT_CLASSES):
+                msg_list = win.ListControl(Name="消息")
+                if not msg_list.Exists(0, 0):
+                    msg_list = win.ListControl(searchDepth=10)
+                if msg_list.Exists(0, 0):
+                    children = msg_list.GetChildren()
+                    for item in reversed(children):
+                        name = item.Name or ""
+                        if any(kw in name for kw in self.TRANSFER_KEYWORDS):
+                            self._click_control(item)
+                            time.sleep(0.3)
+                            if self._click_receive_transfer_button(info):
+                                return True
+        except Exception as e:
+            logger.error("在当前聊天收款失败: %s", e)
+        return False
+
     def _on_success(self, win, info):
-        """抢包成功后处理，记录完整收款信息"""
+        """收款成功后处理，记录完整收款信息"""
         amount = 0.0
         source = info.get("chat_name", "") or "未知来源"
         payer = info.get("payer", "") or "未知"
         remark = info.get("remark", "")
+        event_type = info.get("event_type", "redpacket")
+        record_type = "转账" if event_type == "transfer" else "红包"
 
         # 尝试从结果页面读取金额和备注
         try:
@@ -228,13 +309,7 @@ class RedPacketGrabber:
                 for ctrl in win.GetChildren():
                     if ctrl.Name:
                         texts.append(ctrl.Name)
-                for t in texts:
-                    cleaned = t.replace("元", "").replace("¥", "").strip()
-                    try:
-                        amount = float(cleaned)
-                        break
-                    except ValueError:
-                        continue
+                amount = self._extract_amount_from_texts(texts)
                 # 尝试从弹窗文本中提取更多信息
                 for t in texts:
                     if not remark and "恭喜" not in t and "元" not in t and len(t) > 1:
@@ -243,11 +318,15 @@ class RedPacketGrabber:
         except Exception:
             pass
 
+        if not amount:
+            amount = self._extract_amount_from_texts([info.get("text", ""), remark])
+
         record = self._statistics.add_record(
             amount=amount,
             source=source,
             payer=payer,
             remark=remark,
+            record_type=record_type,
         )
         if self._on_grab_success:
             self._on_grab_success(record)
