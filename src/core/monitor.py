@@ -110,7 +110,8 @@ class WeChatMonitor:
             if not windows:
                 try:
                     for class_name in self.WECHAT_CLASSES:
-                        win = auto.WindowControl(searchDepth=1, ClassName=class_name)
+                        search_depth = 5 if class_name == "mmui::MainWindow" else 1
+                        win = auto.WindowControl(searchDepth=search_depth, ClassName=class_name)
                         if win and win.Exists(0, 0):
                             windows.append(win)
                 except Exception as e:
@@ -239,11 +240,18 @@ class WeChatMonitor:
             sender = sender.strip().strip('"')
             content = content.strip()
 
+        amount = self._extract_amount(content)
+        payer, remark = self._extract_sender_from_message(content)
+        if sender and sender != "我":
+            payer = sender
+
         return {
             "chat_name": session_name,
-            "payer": sender,
+            "payer": payer or sender,
             "text": content,
             "time": time_text,
+            "amount": amount,
+            "remark": remark,
         }
 
     def _get_control_name(self, control):
@@ -394,7 +402,8 @@ class WeChatMonitor:
                     "chat_item": True,
                     "chat_name": parsed.get("chat_name", ""),
                     "payer": parsed.get("payer", ""),
-                    "remark": text.split(matched_kw, 1)[-1].strip() if matched_kw in text else "",
+                    "remark": parsed.get("remark", ""),
+                    "amount": parsed.get("amount", 0.0),
                     "time": parsed.get("time", ""),
                     "class_name": self.SESSION_CELL_CLASS,
                 }
@@ -536,16 +545,16 @@ class WeChatMonitor:
 
                     all_results = []
                     all_results.extend(self._scan_session_cells())
-
-                    for win in self._wechat_windows:
-                        try:
-                            if not win.Exists(0, 0):
+                    if self._wechat_windows:
+                        for win in self._wechat_windows:
+                            try:
+                                if not win.Exists(0, 0):
+                                    continue
+                            except Exception:
                                 continue
-                        except Exception:
-                            continue
 
-                        all_results.extend(self._scan_chat_list(win))
-                        all_results.extend(self._scan_messages(win))
+                            all_results.extend(self._scan_chat_list(win))
+                            all_results.extend(self._scan_messages(win))
 
                     emitted = set()
                     for result in all_results:

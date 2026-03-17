@@ -223,11 +223,21 @@ class MainWindow(QMainWindow):
     def _on_redpacket_found(self, info):
         """检测到收款记录回调"""
         logger.info("检测到收款: %s", info.get("text", ""))
+        source = (info.get("chat_name", "") or "").strip()
+        payer = (info.get("payer", "") or "").strip()
+        amount = float(info.get("amount", 0.0) or 0.0)
+        remark = (info.get("remark", "") or "").strip()
+
+        # 只允许真实监听到的字段入库，不造假
+        if not source and not payer and amount <= 0 and not remark:
+            logger.info("跳过无有效字段的监听结果，不写入收款列表")
+            return
+
         record = self._statistics.add_record(
-            amount=info.get("amount", 0.0),
-            source=info.get("chat_name", "") or "未知来源",
-            payer=info.get("payer", "") or "未知",
-            remark=info.get("remark", ""),
+            amount=amount,
+            source=source,
+            payer=payer,
+            remark=remark,
             record_type="收款",
         )
         self._append_listener_log(record, info)
