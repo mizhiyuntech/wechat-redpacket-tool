@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 try:
     import uiautomation as auto
     HAS_UIA = True
+    try:
+        auto.SetGlobalSearchTimeout(1)
+    except Exception:
+        pass
 except ImportError:
     HAS_UIA = False
     logger.warning("uiautomation不可用，监控功能将无法使用")
@@ -35,6 +39,7 @@ class WeChatMonitor:
         self._thread = None
         self._wechat_windows = []
         self._seen_records = set()
+        self._last_window_refresh = 0.0
         self._dll = self._load_dll()
         self._user32 = getattr(ctypes, "windll", None).user32 if os.name == "nt" else None
 
@@ -499,12 +504,17 @@ class WeChatMonitor:
 
     def _monitor_loop(self):
         logger.info("监控线程启动")
-        interval = max(0.05, self._config.get("check_interval_ms", 100) / 1000.0)
+        interval = max(0.2, self._config.get("check_interval_ms", 300) / 1000.0)
 
         while self._running.is_set():
             try:
-                if not self._wechat_windows:
+                now = time.time()
+                if not self._wechat_windows or now - self._last_window_refresh > 3:
                     self.find_wechat_windows()
+                    self._last_window_refresh = now
+
+                all_results = []
+                all_results.extend(self._scan_session_cells())
 
                 for win in self._wechat_windows:
                     try:
@@ -513,36 +523,32 @@ class WeChatMonitor:
                     except Exception:
                         continue
 
-                    all_results = []
-                    all_results.extend(self._scan_session_cells())
-                    all_results.extend(self._scan_mmui_chat_texts(win))
-                    all_results.extend(self._scan_visible_tree(win))
                     all_results.extend(self._scan_chat_list(win))
                     all_results.extend(self._scan_messages(win))
 
-                    emitted = set()
-                    for result in all_results:
+                emitted = set()
+                for result in all_results:
+                    signature = (
+                        result.get("text", ""),
+                        result.get("chat_name", ""),
+                        result.get("payer", ""),
+                    )
+                    if signature in emitted:
+                        continue
+                    emitted.add(signature)
+                    chat_name = result.get("chat_name", "")
+                    if self._should_monitor_chat(chat_name):
                         signature = (
-                            result.get("text", ""),
                             result.get("chat_name", ""),
                             result.get("payer", ""),
+                            result.get("text", ""),
+                            result.get("time", ""),
                         )
-                        if signature in emitted:
+                        if signature in self._seen_records:
                             continue
-                        emitted.add(signature)
-                        chat_name = result.get("chat_name", "")
-                        if self._should_monitor_chat(chat_name):
-                            signature = (
-                                result.get("chat_name", ""),
-                                result.get("payer", ""),
-                                result.get("text", ""),
-                                result.get("time", ""),
-                            )
-                            if signature in self._seen_records:
-                                continue
-                            self._seen_records.add(signature)
-                            if self._on_redpacket_found:
-                                self._on_redpacket_found(result)
+                        self._seen_records.add(signature)
+                        if self._on_redpacket_found:
+                            self._on_redpacket_found(result)
 
             except Exception as e:
                 logger.error("监控循环异常: %s", e)
@@ -556,7 +562,6 @@ class WeChatMonitor:
             logger.warning("监控已在运行")
             return
         self._running.set()
-        self.find_wechat_windows()
         self._thread = Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
         logger.info("微信监控已启动")

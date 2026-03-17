@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
             self._start()
 
     def _start(self):
+        self._toggle_btn.setEnabled(False)
         self._config.set("enabled", True)
         self._config.save()
         self._monitor.start()
@@ -187,14 +188,17 @@ class MainWindow(QMainWindow):
         self._refresh_wechat_status()
         logger.info("收款监听已开启")
         self._tray.showMessage("微信收款监听", "收款监听已开启", QSystemTrayIcon.Information, 2000)
+        QTimer.singleShot(500, lambda: self._toggle_btn.setEnabled(True))
 
     def _stop(self):
+        self._toggle_btn.setEnabled(False)
         self._config.set("enabled", False)
         self._config.save()
         self._monitor.stop()
         self._update_ui_state(False)
         self._refresh_wechat_status()
         logger.info("收款监听已停止")
+        QTimer.singleShot(300, lambda: self._toggle_btn.setEnabled(True))
 
     def _update_ui_state(self, running: bool):
         self._toggle_btn.setText("停止监听" if running else "开启监听")
