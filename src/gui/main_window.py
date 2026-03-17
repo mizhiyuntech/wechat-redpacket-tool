@@ -232,6 +232,7 @@ class MainWindow(QMainWindow):
         )
         self._play_sound()
         self._stats_widget.refresh()
+        QApplication.processEvents()
         self._tray.showMessage(
             f"{record_type}成功!",
             f"金额: {record.get('amount', 0):.2f}元\n"
