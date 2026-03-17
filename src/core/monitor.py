@@ -42,6 +42,7 @@ class WeChatMonitor:
         self._last_window_refresh = 0.0
         self._dll = self._load_dll()
         self._user32 = getattr(ctypes, "windll", None).user32 if os.name == "nt" else None
+        self._ole32 = getattr(ctypes, "windll", None).ole32 if os.name == "nt" else None
 
     def _enum_wechat_hwnds(self):
         """优先用 Win32 枚举窗口，避免 UIA 根节点遍历导致的 COM 异常。"""
@@ -159,6 +160,10 @@ class WeChatMonitor:
                     if prefix:
                         payer = prefix
                     break
+
+        payer = re.sub(r"(\[转账\]|\[店员消息\]|微信转账)$", "", payer).strip()
+        payer = re.sub(r"(已收款|已被接收|收款成功|收款到账)$", "", payer).strip()
+        payer = re.sub(r"\d{1,2}:\d{2}$", "", payer).strip()
 
         for kw in self.RECEIPT_KEYWORDS:
             if kw in rest:
@@ -505,57 +510,79 @@ class WeChatMonitor:
     def _monitor_loop(self):
         logger.info("监控线程启动")
         interval = max(0.2, self._config.get("check_interval_ms", 300) / 1000.0)
+        initializer = None
+        com_inited = False
+        try:
+            if HAS_UIA and hasattr(auto, "UIAutomationInitializerInThread"):
+                try:
+                    initializer = auto.UIAutomationInitializerInThread()
+                    com_inited = True
+                except Exception as e:
+                    logger.debug("UIAutomationInitializerInThread初始化失败: %s", e)
 
-        while self._running.is_set():
-            try:
-                now = time.time()
-                if not self._wechat_windows or now - self._last_window_refresh > 3:
-                    self.find_wechat_windows()
-                    self._last_window_refresh = now
+            if not com_inited and self._ole32:
+                try:
+                    self._ole32.CoInitialize(None)
+                    com_inited = True
+                except Exception as e:
+                    logger.debug("CoInitialize初始化失败: %s", e)
 
-                all_results = []
-                all_results.extend(self._scan_session_cells())
+            while self._running.is_set():
+                try:
+                    now = time.time()
+                    if not self._wechat_windows or now - self._last_window_refresh > 3:
+                        self.find_wechat_windows()
+                        self._last_window_refresh = now
 
-                for win in self._wechat_windows:
-                    try:
-                        if not win.Exists(0, 0):
+                    all_results = []
+                    all_results.extend(self._scan_session_cells())
+
+                    for win in self._wechat_windows:
+                        try:
+                            if not win.Exists(0, 0):
+                                continue
+                        except Exception:
                             continue
-                    except Exception:
-                        continue
 
-                    all_results.extend(self._scan_chat_list(win))
-                    all_results.extend(self._scan_messages(win))
+                        all_results.extend(self._scan_chat_list(win))
+                        all_results.extend(self._scan_messages(win))
 
-                emitted = set()
-                for result in all_results:
-                    signature = (
-                        result.get("text", ""),
-                        result.get("chat_name", ""),
-                        result.get("payer", ""),
-                    )
-                    if signature in emitted:
-                        continue
-                    emitted.add(signature)
-                    chat_name = result.get("chat_name", "")
-                    if self._should_monitor_chat(chat_name):
+                    emitted = set()
+                    for result in all_results:
                         signature = (
+                            result.get("text", ""),
                             result.get("chat_name", ""),
                             result.get("payer", ""),
-                            result.get("text", ""),
-                            result.get("time", ""),
                         )
-                        if signature in self._seen_records:
+                        if signature in emitted:
                             continue
-                        self._seen_records.add(signature)
-                        if self._on_redpacket_found:
-                            self._on_redpacket_found(result)
+                        emitted.add(signature)
+                        chat_name = result.get("chat_name", "")
+                        if self._should_monitor_chat(chat_name):
+                            signature = (
+                                result.get("chat_name", ""),
+                                result.get("payer", ""),
+                                result.get("text", ""),
+                                result.get("time", ""),
+                            )
+                            if signature in self._seen_records:
+                                continue
+                            self._seen_records.add(signature)
+                            if self._on_redpacket_found:
+                                self._on_redpacket_found(result)
 
-            except Exception as e:
-                logger.error("监控循环异常: %s", e)
+                except Exception as e:
+                    logger.error("监控循环异常: %s", e)
 
-            time.sleep(interval)
-
-        logger.info("监控线程停止")
+                time.sleep(interval)
+        finally:
+            if com_inited and self._ole32:
+                try:
+                    self._ole32.CoUninitialize()
+                except Exception:
+                    pass
+            initializer = None
+            logger.info("监控线程停止")
 
     def start(self):
         if self._thread and self._thread.is_alive():
