@@ -23,34 +23,34 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        # 抢包设置
-        grab_group = QGroupBox("抢包设置")
+        # 监听设置
+        grab_group = QGroupBox("监听设置")
         grab_layout = QFormLayout(grab_group)
 
         self._delay_min = QSpinBox()
         self._delay_min.setRange(0, 10000)
         self._delay_min.setSuffix(" 毫秒")
-        grab_layout.addRow("最小延迟:", self._delay_min)
+        grab_layout.addRow("最小记录延迟:", self._delay_min)
 
         self._delay_max = QSpinBox()
         self._delay_max.setRange(0, 10000)
         self._delay_max.setSuffix(" 毫秒")
-        grab_layout.addRow("最大延迟:", self._delay_max)
+        grab_layout.addRow("最大记录延迟:", self._delay_max)
 
-        self._transfer_enabled = QCheckBox("启用普通转账监听/收款")
+        self._transfer_enabled = QCheckBox("启用收款记录监听")
         grab_layout.addRow(self._transfer_enabled)
 
         self._transfer_delay = QSpinBox()
         self._transfer_delay.setRange(0, 30000)
         self._transfer_delay.setSuffix(" 毫秒")
-        grab_layout.addRow("延迟收款时间:", self._transfer_delay)
+        grab_layout.addRow("记录延迟时间:", self._transfer_delay)
 
         self._check_interval = QSpinBox()
         self._check_interval.setRange(100, 5000)
         self._check_interval.setSuffix(" 毫秒")
         grab_layout.addRow("检测间隔:", self._check_interval)
 
-        self._sound_enabled = QCheckBox("抢到红包播放提示音")
+        self._sound_enabled = QCheckBox("监听到收款时播放提示音")
         grab_layout.addRow(self._sound_enabled)
 
         layout.addWidget(grab_group)

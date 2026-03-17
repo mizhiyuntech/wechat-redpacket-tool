@@ -162,7 +162,7 @@ class StatisticsWidget(QWidget):
 
         for i, record in enumerate(reversed(records)):
             # 来源
-            self._table.setItem(i, 0, QTableWidgetItem(record.get("type", "红包")))
+            self._table.setItem(i, 0, QTableWidgetItem(record.get("type", "收款")))
             self._table.setItem(i, 1, QTableWidgetItem(record.get("source", "")))
             # 付款人
             self._table.setItem(i, 2, QTableWidgetItem(record.get("payer", "")))
@@ -198,7 +198,7 @@ class StatisticsWidget(QWidget):
                 writer.writerow(self.COLUMNS)
                 for r in records:
                     writer.writerow([
-                        r.get("type", "红包"),
+                        r.get("type", "收款"),
                         r.get("source", ""),
                         r.get("payer", ""),
                         f"{r.get('amount', 0):.2f}",

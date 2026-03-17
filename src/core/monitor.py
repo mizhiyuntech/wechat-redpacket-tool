@@ -17,15 +17,13 @@ except ImportError:
 
 
 class WeChatMonitor:
-    """微信窗口监控，检测红包消息"""
+    """微信窗口监控，仅监听已收款记录"""
 
-    RED_PACKET_KEYWORDS = ["微信红包", "[微信红包]", "领取红包", "恭喜发财"]
-    TRANSFER_KEYWORDS = ["微信转账", "[转账]", "转账给你", "请收款", "待收款", "向你转账"]
+    RECEIPT_KEYWORDS = ["已收款", "已被接收", "收款成功", "收款到账", "已存入零钱", "转账已收取", "转账已领取"]
     IGNORE_TEXT_KEYWORDS = [
-        "[草稿]", "草稿", "消息免打扰", "已置顶", "撤销", "已收款", "已领取",
-        "已被领取", "已过期", "转账已收取", "转账已领取", "已存入零钱", "收款成功"
+        "[草稿]", "草稿", "消息免打扰", "已置顶", "撤销", "已领取", "已被领取", "已过期"
     ]
-    IGNORE_CHAT_NAMES = ["微信收款助手"]
+    IGNORE_CHAT_NAMES = []
     WECHAT_CLASSES = ("WeChatMainWndForPC", "ChatWnd", "mmui::ChatSingleWindow", "mmui::MainWindow")
     MESSAGE_TEXT_CLASSES = ("mmui::ChatTextItemView",)
     SESSION_CELL_CLASS = "mmui::ChatSessionCell"
@@ -36,6 +34,7 @@ class WeChatMonitor:
         self._running = Event()
         self._thread = None
         self._wechat_windows = []
+        self._seen_records = set()
         self._dll = self._load_dll()
         self._user32 = getattr(ctypes, "windll", None).user32 if os.name == "nt" else None
 
@@ -135,7 +134,7 @@ class WeChatMonitor:
         """从消息文本中提取发送者和备注"""
         payer = ""
         remark = ""
-        # 常见格式: "张三: [微信红包] 恭喜发财"
+        # 常见格式: "张三: [转账] 已收款 备注"
         if ": " in item_name:
             parts = item_name.split(": ", 1)
             payer = parts[0].strip()
@@ -147,17 +146,36 @@ class WeChatMonitor:
         else:
             rest = item_name
 
-        # 提取备注（红包祝福语/转账说明）
-        for kw in self.RED_PACKET_KEYWORDS + self.TRANSFER_KEYWORDS:
+        if not payer:
+            for kw in self.RECEIPT_KEYWORDS:
+                if kw in rest:
+                    prefix = rest.split(kw, 1)[0].strip()
+                    prefix = re.sub(r"(\[转账\]|\[店员消息\]|微信转账|微信收款助手)$", "", prefix).strip()
+                    if prefix:
+                        payer = prefix
+                    break
+
+        for kw in self.RECEIPT_KEYWORDS:
             if kw in rest:
                 after_kw = rest.split(kw, 1)[-1].strip()
                 if after_kw:
                     remark = after_kw
                 break
 
-        remark = re.sub(r"^(已收款|请收款|待收款|向你转账)\s*", "", remark).strip()
+        remark = re.sub(r"^(已收款|已被接收|收款成功|收款到账|已存入零钱|转账已收取|转账已领取)\s*", "", remark).strip()
+        remark = re.sub(r"^\d{1,2}:\d{2}", "", remark).strip()
+        remark = re.sub(r"^(微信转账|\[转账\]|\[店员消息\])", "", remark).strip()
 
         return payer, remark
+
+    def _extract_amount(self, text: str) -> float:
+        text = (text or "").strip()
+        for match in re.findall(r"(?:¥|￥)?\s*([0-9]+(?:\.[0-9]{1,2})?)\s*元?", text):
+            try:
+                return float(match)
+            except ValueError:
+                continue
+        return 0.0
 
     def _detect_event(self, text: str):
         text = (text or "").strip()
@@ -165,15 +183,9 @@ class WeChatMonitor:
             return None, None
         if any(keyword in text for keyword in self.IGNORE_TEXT_KEYWORDS):
             return None, None
-        for kw in self.RED_PACKET_KEYWORDS:
+        for kw in self.RECEIPT_KEYWORDS:
             if kw in text:
-                return "redpacket", kw
-        if self._config.get("transfer_enabled", True):
-            for kw in self.TRANSFER_KEYWORDS:
-                if kw in text:
-                    return "transfer", kw
-            if "收款" in text and not any(keyword in text for keyword in self.IGNORE_TEXT_KEYWORDS):
-                return "transfer", "收款"
+                return "receipt", kw
         return None, None
 
     def _should_ignore_chat(self, chat_name: str) -> bool:
@@ -273,12 +285,13 @@ class WeChatMonitor:
             "chat_name": chat_name,
             "payer": payer,
             "remark": remark,
-            "event_type": event_type or "redpacket",
+            "amount": self._extract_amount(item_name),
+            "event_type": event_type or "receipt",
             "keyword": keyword or "",
         }
 
     def _scan_visible_tree(self, wechat_window):
-        """参考文章思路：递归解析当前可见控件文本，不依赖固定控件名。"""
+        """递归解析当前可见控件文本，仅保留已收款记录。"""
         results = []
         seen = set()
         chat_name = self._get_current_chat_name(wechat_window)
@@ -322,7 +335,7 @@ class WeChatMonitor:
         return results
 
     def _scan_session_cells(self):
-        """参考 1.py：从 mmui::MainWindow 深层递归提取会话列表项。"""
+        """从 mmui::MainWindow 深层递归提取会话列表中的已收款记录。"""
         results = []
         seen = set()
         try:
@@ -519,6 +532,15 @@ class WeChatMonitor:
                         emitted.add(signature)
                         chat_name = result.get("chat_name", "")
                         if self._should_monitor_chat(chat_name):
+                            signature = (
+                                result.get("chat_name", ""),
+                                result.get("payer", ""),
+                                result.get("text", ""),
+                                result.get("time", ""),
+                            )
+                            if signature in self._seen_records:
+                                continue
+                            self._seen_records.add(signature)
                             if self._on_redpacket_found:
                                 self._on_redpacket_found(result)
 

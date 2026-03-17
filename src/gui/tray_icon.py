@@ -25,7 +25,7 @@ class TrayIcon(QSystemTrayIcon):
                 QApplication.style().SP_ComputerIcon
             ))
 
-        self.setToolTip("微信自动抢红包工具")
+        self.setToolTip("微信收款监听工具")
         self._setup_menu()
         self.activated.connect(self._on_activated)
 
@@ -38,7 +38,7 @@ class TrayIcon(QSystemTrayIcon):
 
         menu.addSeparator()
 
-        self._toggle_action = QAction("开启抢包", menu)
+        self._toggle_action = QAction("开启监听", menu)
         self._toggle_action.triggered.connect(self.toggle_signal.emit)
         menu.addAction(self._toggle_action)
 
@@ -57,8 +57,8 @@ class TrayIcon(QSystemTrayIcon):
     def update_status(self, running: bool):
         """更新托盘菜单状态"""
         if running:
-            self._toggle_action.setText("停止抢包")
-            self.setToolTip("微信自动抢红包 - 运行中")
+            self._toggle_action.setText("停止监听")
+            self.setToolTip("微信收款监听 - 运行中")
         else:
-            self._toggle_action.setText("开启抢包")
-            self.setToolTip("微信自动抢红包 - 已停止")
+            self._toggle_action.setText("开启监听")
+            self.setToolTip("微信收款监听 - 已停止")

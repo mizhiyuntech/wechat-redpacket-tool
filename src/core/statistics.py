@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class Statistics:
-    """红包收款记录统计"""
+    """收款记录统计"""
 
     def __init__(self):
         self._records = []
@@ -33,14 +33,14 @@ class Statistics:
         except IOError as e:
             logger.error("统计数据保存失败: %s", e)
 
-    def add_record(self, amount: float, source: str, payer: str, remark: str = "", record_type: str = "红包"):
+    def add_record(self, amount: float, source: str, payer: str, remark: str = "", record_type: str = "收款"):
         """添加收款记录
 
         Args:
             amount: 付款金额
             source: 来源（群聊名称/私聊名称）
             payer: 付款人昵称
-            remark: 红包备注（如"恭喜发财"等）
+            remark: 收款备注
         """
         record = {
             "type": record_type,

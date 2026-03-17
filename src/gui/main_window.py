@@ -14,7 +14,6 @@ from gui.statistics_widget import StatisticsWidget
 from gui.tray_icon import TrayIcon
 from core.config import Config
 from core.monitor import WeChatMonitor
-from core.grabber import RedPacketGrabber
 from core.statistics import Statistics
 from core.scheduler import Scheduler
 
@@ -51,17 +50,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("微信自动抢红包工具")
+        self.setWindowTitle("微信收款监听工具")
         self.setMinimumSize(700, 550)
+        self._listener_log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "success_logs"))
 
         # 初始化核心组件
         self._config = Config()
         self._statistics = Statistics()
         self._scheduler = Scheduler(self._config)
         self._monitor = WeChatMonitor(self._config, on_redpacket_found=self._on_redpacket_found)
-        self._grabber = RedPacketGrabber(
-            self._config, self._statistics, on_grab_success=self._on_grab_success_from_thread
-        )
 
         self._setup_ui()
         self._setup_tray()
@@ -102,7 +99,7 @@ class MainWindow(QMainWindow):
         # 控制按钮区
         ctrl_layout = QHBoxLayout()
 
-        self._toggle_btn = QPushButton("开启抢包")
+        self._toggle_btn = QPushButton("开启监听")
         self._toggle_btn.setObjectName("toggleBtn")
         self._toggle_btn.setProperty("running", False)
         self._toggle_btn.clicked.connect(self._toggle)
@@ -176,7 +173,7 @@ class MainWindow(QMainWindow):
         self._refresh_wechat_status()
 
     def _toggle(self):
-        """开关抢包功能"""
+        """开关监听功能"""
         if self._monitor.is_running:
             self._stop()
         else:
@@ -188,8 +185,8 @@ class MainWindow(QMainWindow):
         self._monitor.start()
         self._update_ui_state(True)
         self._refresh_wechat_status()
-        logger.info("抢包功能已开启")
-        self._tray.showMessage("微信抢红包", "自动抢包已开启", QSystemTrayIcon.Information, 2000)
+        logger.info("收款监听已开启")
+        self._tray.showMessage("微信收款监听", "收款监听已开启", QSystemTrayIcon.Information, 2000)
 
     def _stop(self):
         self._config.set("enabled", False)
@@ -197,10 +194,10 @@ class MainWindow(QMainWindow):
         self._monitor.stop()
         self._update_ui_state(False)
         self._refresh_wechat_status()
-        logger.info("抢包功能已停止")
+        logger.info("收款监听已停止")
 
     def _update_ui_state(self, running: bool):
-        self._toggle_btn.setText("停止抢包" if running else "开启抢包")
+        self._toggle_btn.setText("停止监听" if running else "开启监听")
         self._toggle_btn.setProperty("running", running)
         self._toggle_btn.style().unpolish(self._toggle_btn)
         self._toggle_btn.style().polish(self._toggle_btn)
@@ -220,18 +217,25 @@ class MainWindow(QMainWindow):
             self._wechat_status.setStyleSheet("color: white; font-size: 13px;")
 
     def _on_redpacket_found(self, info):
-        """检测到红包回调 (从工作线程调用，logger已线程安全)"""
-        event_type = info.get("event_type", "redpacket")
-        logger.info("检测到%s: %s", "转账" if event_type == "transfer" else "红包", info.get("text", ""))
-        self._grabber.grab(info)
+        """检测到收款记录回调"""
+        logger.info("检测到收款: %s", info.get("text", ""))
+        record = self._statistics.add_record(
+            amount=info.get("amount", 0.0),
+            source=info.get("chat_name", "") or "未知来源",
+            payer=info.get("payer", "") or "未知",
+            remark=info.get("remark", ""),
+            record_type="收款",
+        )
+        self._append_listener_log(record, info)
+        self._on_grab_success_from_thread(record)
 
     def _on_grab_success_from_thread(self, record):
-        """抢包成功回调 (从工作线程调用，通过信号转发到GUI线程)"""
+        """收款记录回调 (从工作线程调用，通过信号转发到GUI线程)"""
         self._grab_success_signal.emit(record)
 
     def _handle_grab_success(self, record):
-        """在GUI线程中处理抢包成功 (由信号触发)"""
-        record_type = record.get("type", "红包")
+        """在GUI线程中处理收款成功 (由信号触发)"""
+        record_type = record.get("type", "收款")
         self._statistics.load()
         logger.info(
             "%s成功! 金额: %.2f元 | 来源: %s | 付款人: %s",
@@ -241,7 +245,7 @@ class MainWindow(QMainWindow):
         self._stats_widget.refresh()
         QApplication.processEvents()
         self._tray.showMessage(
-            f"{record_type}成功!",
+            f"{record_type}记录",
             f"金额: {record.get('amount', 0):.2f}元\n"
             f"付款人: {record.get('payer', '未知')}\n"
             f"来源: {record.get('source', '')}",
@@ -283,7 +287,7 @@ class MainWindow(QMainWindow):
         dlg.exec_()
 
     def _open_success_logs_dir(self):
-        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "success_logs"))
+        path = self._listener_log_dir
         os.makedirs(path, exist_ok=True)
         try:
             os.startfile(path)
@@ -291,6 +295,20 @@ class MainWindow(QMainWindow):
             logger.info("成功日志目录: %s", path)
         except Exception as e:
             logger.error("打开日志目录失败: %s", e)
+
+    def _append_listener_log(self, record, info):
+        os.makedirs(self._listener_log_dir, exist_ok=True)
+        path = os.path.join(self._listener_log_dir, f"listener-{record.get('time', '')[:10] or 'today'}.txt")
+        raw = info.get("text", "")
+        line = (
+            f"{record.get('time', '')} | 收款 | 来源={record.get('source', '')} | 付款人={record.get('payer', '')} | "
+            f"金额={record.get('amount', 0):.2f} | 备注={record.get('remark', '')} | 原始={raw}\n"
+        )
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception as e:
+            logger.error("写入监听日志失败: %s", e)
 
     def _show_from_tray(self):
         self.showNormal()
@@ -304,7 +322,7 @@ class MainWindow(QMainWindow):
         if self._config.get("minimize_to_tray", True):
             event.ignore()
             self.hide()
-            self._tray.showMessage("微信抢红包", "程序已最小化到托盘", QSystemTrayIcon.Information, 2000)
+            self._tray.showMessage("微信收款监听", "程序已最小化到托盘", QSystemTrayIcon.Information, 2000)
         else:
             self._monitor.stop()
             event.accept()

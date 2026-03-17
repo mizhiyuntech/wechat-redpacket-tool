@@ -1,4 +1,4 @@
-"""微信自动抢红包工具 - 程序入口"""
+"""微信收款监听工具 - 程序入口"""
 import sys
 import os
 import logging
@@ -37,7 +37,7 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("微信自动抢红包工具")
+    app.setApplicationName("微信收款监听工具")
 
     # 检查免责声明
     config = Config()
