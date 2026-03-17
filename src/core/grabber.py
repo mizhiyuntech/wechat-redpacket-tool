@@ -167,10 +167,48 @@ class RedPacketGrabber:
             try:
                 ctrl_name = (ctrl.Name or "").strip()
                 if ctrl_name in target_names:
-                    return ctrl
+                    rect = ctrl.BoundingRectangle
+                    if rect and rect.right > rect.left and rect.bottom > rect.top:
+                        return ctrl
             except Exception:
                 continue
         return None
+
+    def _get_top_level_control(self, control):
+        if not control:
+            return None
+        try:
+            return control.GetTopLevelControl()
+        except Exception:
+            return control
+
+    def _get_foreground_window_control(self):
+        try:
+            if self._user32:
+                hwnd = self._user32.GetForegroundWindow()
+                if hwnd:
+                    return auto.ControlFromHandle(hwnd)
+        except Exception as e:
+            logger.debug("获取前台窗口失败: %s", e)
+        return None
+
+    def _get_search_roots(self, control=None):
+        roots = []
+        top = self._get_top_level_control(control)
+        if top:
+            roots.append(top)
+
+        fg = self._get_foreground_window_control()
+        if fg:
+            fg_hwnd = int(getattr(fg, "NativeWindowHandle", 0) or 0)
+            if not any(int(getattr(r, "NativeWindowHandle", 0) or 0) == fg_hwnd for r in roots):
+                roots.append(fg)
+
+        for win in self._enum_window_controls(class_name=self.WECHAT_CLASSES):
+            hwnd = int(getattr(win, "NativeWindowHandle", 0) or 0)
+            if not any(int(getattr(r, "NativeWindowHandle", 0) or 0) == hwnd for r in roots):
+                roots.append(win)
+        return roots
 
     def _append_success_log(self, record_type, source, payer, amount, remark):
         try:
@@ -184,6 +222,69 @@ class RedPacketGrabber:
                 f.write(line)
         except Exception as e:
             logger.warning("写入成功日志失败: %s", e)
+
+    def _collect_all_texts(self, root, max_depth=8):
+        texts = []
+        try:
+            for ctrl in self._iter_descendants(root, max_depth=max_depth):
+                name = (getattr(ctrl, "Name", "") or "").strip()
+                if name:
+                    texts.append(name)
+        except Exception:
+            pass
+        return texts
+
+    def _clean_text(self, text):
+        return re.sub(r"\s+", " ", (text or "").strip())
+
+    def _extract_remark_from_info(self, info):
+        text = self._clean_text(info.get("text", ""))
+        if not text:
+            return ""
+
+        patterns = [
+            r"(?:微信红包|\[微信红包\]|领取红包|恭喜发财)\s*(.+)$",
+            r"(?:微信转账|\[转账\]|转账给你|请收款|待收款|向你转账)\s*(.+)$",
+            r"(?:留言|备注)[:：]\s*(.+)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                remark = self._clean_text(match.group(1))
+                remark = re.sub(r"^(已收款|请收款|待收款)\s*", "", remark).strip()
+                if remark and remark not in self.TRANSFER_BUTTON_NAMES:
+                    return remark
+        return ""
+
+    def _extract_remark_from_texts(self, texts, payer, source, event_type):
+        ignore = {
+            "", payer, source, "红包", "微信红包", "领取红包", "开", "拆红包",
+            "立即领取", "收款", "确认收款", "转账", "微信转账", "已收款",
+        }
+        candidates = []
+        for text in texts:
+            clean = self._clean_text(text)
+            if not clean or clean in ignore:
+                continue
+            if re.search(r"(¥|￥|元|^\d+(?:\.\d{1,2})?$)", clean):
+                continue
+            if clean in self.TRANSFER_BUTTON_NAMES:
+                continue
+            if len(clean) <= 1:
+                continue
+
+            msg = re.search(r"(?:留言|备注)[:：]\s*(.+)$", clean)
+            if msg:
+                clean = self._clean_text(msg.group(1))
+            if clean and clean not in ignore:
+                candidates.append(clean)
+
+        for candidate in candidates:
+            if event_type == "redpacket" and any(kw in candidate for kw in ["恭喜", "发财", "红包"]):
+                return candidate
+        if candidates:
+            return candidates[0]
+        return ""
 
     def grab(self, redpacket_info: dict):
         """执行红包/转账处理"""
@@ -206,6 +307,7 @@ class RedPacketGrabber:
             "remark": redpacket_info.get("remark", ""),
             "event_type": redpacket_info.get("event_type", "redpacket"),
             "text": redpacket_info.get("text", ""),
+            "root_control": self._get_top_level_control(control),
         }
 
         try:
@@ -269,7 +371,7 @@ class RedPacketGrabber:
     def _click_open_button(self, info):
         try:
             time.sleep(0.5)
-            for win in self._enum_window_controls():
+            for win in self._get_search_roots(info.get("root_control")):
                 win_name = win.Name or ""
                 win_class = getattr(win, "ClassName", "") or ""
                 if "红包" in win_name or "Red Packet" in win_name or win_class in self.WECHAT_CLASSES:
@@ -305,10 +407,10 @@ class RedPacketGrabber:
     def _click_receive_transfer_button(self, info):
         try:
             time.sleep(0.5)
-            for win in self._enum_window_controls():
+            for win in self._get_search_roots(info.get("root_control")):
                 texts = []
                 try:
-                    for child in win.GetChildren():
+                    for child in self._iter_descendants(win, max_depth=6):
                         if child.Name:
                             texts.append(child.Name)
                 except Exception:
@@ -342,7 +444,7 @@ class RedPacketGrabber:
 
     def _grab_in_current_chat(self, info):
         try:
-            for win in self._enum_window_controls(class_name=self.WECHAT_CLASSES):
+            for win in self._get_search_roots(info.get("root_control")):
                 msg_list = win.ListControl(Name="消息")
                 if not msg_list.Exists(0, 0):
                     msg_list = win.ListControl(searchDepth=8)
@@ -362,7 +464,7 @@ class RedPacketGrabber:
 
     def _receive_transfer_in_current_chat(self, info):
         try:
-            for win in self._enum_window_controls(class_name=self.WECHAT_CLASSES):
+            for win in self._get_search_roots(info.get("root_control")):
                 msg_list = win.ListControl(Name="消息")
                 if not msg_list.Exists(0, 0):
                     msg_list = win.ListControl(searchDepth=10)
@@ -386,7 +488,7 @@ class RedPacketGrabber:
         amount = 0.0
         source = info.get("chat_name", "") or "未知来源"
         payer = info.get("payer", "") or "未知"
-        remark = info.get("remark", "")
+        remark = self._clean_text(info.get("remark", ""))
         event_type = info.get("event_type", "redpacket")
         record_type = "转账" if event_type == "transfer" else "红包"
 
@@ -394,21 +496,25 @@ class RedPacketGrabber:
         try:
             if win:
                 time.sleep(0.5)
-                texts = []
-                for ctrl in win.GetChildren():
-                    if ctrl.Name:
-                        texts.append(ctrl.Name)
+                texts = self._collect_all_texts(win, max_depth=10)
                 amount = self._extract_amount_from_texts(texts)
-                # 尝试从弹窗文本中提取更多信息
-                for t in texts:
-                    if not remark and "恭喜" not in t and "元" not in t and len(t) > 1:
-                        if t not in (payer, source):
-                            remark = t
+                if not remark:
+                    remark = self._extract_remark_from_texts(texts, payer, source, event_type)
         except Exception:
             pass
 
         if not amount:
             amount = self._extract_amount_from_texts([info.get("text", ""), remark])
+        if not remark:
+            remark = self._extract_remark_from_info(info)
+        if not remark and info.get("text"):
+            raw_text = self._clean_text(info.get("text", ""))
+            raw_text = re.sub(r"^(?:.+?:\s*)?", "", raw_text).strip()
+            for prefix in ("[微信红包]", "微信红包", "领取红包", "恭喜发财", "[转账]", "微信转账", "转账给你", "请收款", "待收款", "向你转账"):
+                if raw_text.startswith(prefix):
+                    raw_text = raw_text[len(prefix):].strip()
+            if raw_text and raw_text not in self.TRANSFER_BUTTON_NAMES:
+                remark = raw_text
 
         record = self._statistics.add_record(
             amount=amount,

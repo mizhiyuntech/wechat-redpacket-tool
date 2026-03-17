@@ -20,7 +20,12 @@ class WeChatMonitor:
     """微信窗口监控，检测红包消息"""
 
     RED_PACKET_KEYWORDS = ["微信红包", "[微信红包]", "领取红包", "恭喜发财"]
-    TRANSFER_KEYWORDS = ["微信转账", "[转账]", "转账给你", "请收款", "待收款", "向你转账", "收款"]
+    TRANSFER_KEYWORDS = ["微信转账", "[转账]", "转账给你", "请收款", "待收款", "向你转账"]
+    IGNORE_TEXT_KEYWORDS = [
+        "[草稿]", "草稿", "消息免打扰", "已置顶", "撤销", "已收款", "已领取",
+        "已被领取", "已过期", "转账已收取", "转账已领取", "已存入零钱", "收款成功"
+    ]
+    IGNORE_CHAT_NAMES = ["微信收款助手"]
     WECHAT_CLASSES = ("WeChatMainWndForPC", "ChatWnd", "mmui::ChatSingleWindow", "mmui::MainWindow")
     MESSAGE_TEXT_CLASSES = ("mmui::ChatTextItemView",)
     SESSION_CELL_CLASS = "mmui::ChatSessionCell"
@@ -142,17 +147,24 @@ class WeChatMonitor:
         else:
             rest = item_name
 
-        # 提取备注（红包祝福语）
-        for kw in self.RED_PACKET_KEYWORDS:
+        # 提取备注（红包祝福语/转账说明）
+        for kw in self.RED_PACKET_KEYWORDS + self.TRANSFER_KEYWORDS:
             if kw in rest:
                 after_kw = rest.split(kw, 1)[-1].strip()
                 if after_kw:
                     remark = after_kw
                 break
 
+        remark = re.sub(r"^(已收款|请收款|待收款|向你转账)\s*", "", remark).strip()
+
         return payer, remark
 
     def _detect_event(self, text: str):
+        text = (text or "").strip()
+        if not text:
+            return None, None
+        if any(keyword in text for keyword in self.IGNORE_TEXT_KEYWORDS):
+            return None, None
         for kw in self.RED_PACKET_KEYWORDS:
             if kw in text:
                 return "redpacket", kw
@@ -160,7 +172,13 @@ class WeChatMonitor:
             for kw in self.TRANSFER_KEYWORDS:
                 if kw in text:
                     return "transfer", kw
+            if "收款" in text and not any(keyword in text for keyword in self.IGNORE_TEXT_KEYWORDS):
+                return "transfer", "收款"
         return None, None
+
+    def _should_ignore_chat(self, chat_name: str) -> bool:
+        chat_name = (chat_name or "").strip()
+        return chat_name in self.IGNORE_CHAT_NAMES
 
     def _is_time_line(self, text: str) -> bool:
         text = (text or "").strip()
@@ -279,6 +297,8 @@ class WeChatMonitor:
                     continue
                 if not matched_kw:
                     continue
+                if self._should_ignore_chat(chat_name):
+                    continue
 
                 clickable = self._get_clickable_control(ctrl)
                 try:
@@ -323,6 +343,8 @@ class WeChatMonitor:
 
                 parsed = self._parse_session_name_block(block_name)
                 if not parsed:
+                    continue
+                if self._should_ignore_chat(parsed.get("chat_name", "")):
                     continue
 
                 text = parsed.get("text", "")
@@ -372,6 +394,8 @@ class WeChatMonitor:
                 item_name = self._get_control_name(ctrl)
                 if not item_name:
                     continue
+                if self._should_ignore_chat(chat_name):
+                    continue
 
                 event_type, matched_kw = self._detect_event(item_name)
                 if not matched_kw:
@@ -410,7 +434,7 @@ class WeChatMonitor:
             for item in msg_list.GetChildren():
                 item_name = item.Name or ""
                 event_type, kw = self._detect_event(item_name)
-                if kw:
+                if kw and not self._should_ignore_chat(chat_name):
                     result = self._build_result(item, item_name, chat_name=chat_name, chat_item=False)
                     result["keyword"] = kw
                     result["event_type"] = event_type
@@ -444,6 +468,8 @@ class WeChatMonitor:
                                     break
                     except Exception:
                         pass
+                    if self._should_ignore_chat(chat_name):
+                        continue
                     result = self._build_result(item, item_name, chat_name=chat_name, chat_item=True)
                     result["keyword"] = kw
                     result["event_type"] = event_type
@@ -460,7 +486,7 @@ class WeChatMonitor:
 
     def _monitor_loop(self):
         logger.info("监控线程启动")
-        interval = self._config.get("check_interval_ms", 300) / 1000.0
+        interval = max(0.05, self._config.get("check_interval_ms", 100) / 1000.0)
 
         while self._running.is_set():
             try:

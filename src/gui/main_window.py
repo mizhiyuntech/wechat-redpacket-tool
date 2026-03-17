@@ -128,7 +128,13 @@ class MainWindow(QMainWindow):
 
         clear_log_btn = QPushButton("清除日志")
         clear_log_btn.clicked.connect(self._log_view.clear)
-        log_layout.addWidget(clear_log_btn, alignment=Qt.AlignRight)
+        log_btn_layout = QHBoxLayout()
+        log_btn_layout.addStretch()
+        open_logs_btn = QPushButton("打开日志目录")
+        open_logs_btn.clicked.connect(self._open_success_logs_dir)
+        log_btn_layout.addWidget(open_logs_btn)
+        log_btn_layout.addWidget(clear_log_btn)
+        log_layout.addLayout(log_btn_layout)
 
         tabs.addTab(log_widget, "日志")
 
@@ -226,6 +232,7 @@ class MainWindow(QMainWindow):
     def _handle_grab_success(self, record):
         """在GUI线程中处理抢包成功 (由信号触发)"""
         record_type = record.get("type", "红包")
+        self._statistics.load()
         logger.info(
             "%s成功! 金额: %.2f元 | 来源: %s | 付款人: %s",
             record_type, record.get("amount", 0), record.get("source", ""), record.get("payer", "")
@@ -274,6 +281,16 @@ class MainWindow(QMainWindow):
     def _open_settings(self):
         dlg = SettingsDialog(self._config, self)
         dlg.exec_()
+
+    def _open_success_logs_dir(self):
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "success_logs"))
+        os.makedirs(path, exist_ok=True)
+        try:
+            os.startfile(path)
+        except AttributeError:
+            logger.info("成功日志目录: %s", path)
+        except Exception as e:
+            logger.error("打开日志目录失败: %s", e)
 
     def _show_from_tray(self):
         self.showNormal()

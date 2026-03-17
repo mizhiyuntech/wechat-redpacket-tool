@@ -21,7 +21,7 @@ DEFAULT_CONFIG = {
     "multi_instance": False,
     "log_level": "INFO",
     "minimize_to_tray": True,
-    "check_interval_ms": 300,
+    "check_interval_ms": 100,
 }
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".wechat_redpacket")
