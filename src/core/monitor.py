@@ -31,6 +31,7 @@ class WeChatMonitor:
     WECHAT_CLASSES = ("WeChatMainWndForPC", "ChatWnd", "mmui::ChatSingleWindow", "mmui::MainWindow")
     MESSAGE_TEXT_CLASSES = ("mmui::ChatTextItemView",)
     SESSION_CELL_CLASS = "mmui::ChatSessionCell"
+    CHATWND_CLASS = "ChatWnd"
 
     def __init__(self, config, on_redpacket_found=None):
         self._config = config
@@ -114,6 +115,11 @@ class WeChatMonitor:
                         win = auto.WindowControl(searchDepth=search_depth, ClassName=class_name)
                         if win and win.Exists(0, 0):
                             windows.append(win)
+                    chat_wnd = auto.WindowControl(searchDepth=1, ClassName=self.CHATWND_CLASS)
+                    if chat_wnd and chat_wnd.Exists(0, 0):
+                        chat_hwnd = getattr(chat_wnd, "NativeWindowHandle", 0)
+                        if not any(getattr(win, "NativeWindowHandle", 0) == chat_hwnd for win in windows):
+                            windows.append(chat_wnd)
                 except Exception as e:
                     logger.debug("WindowControl查找微信窗口失败: %s", e)
         except Exception as e:
@@ -181,12 +187,52 @@ class WeChatMonitor:
 
     def _extract_amount(self, text: str) -> float:
         text = (text or "").strip()
+        match = re.search(r"收款金额[¥￥]?\s*([\d.]+)", text)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                pass
         for match in re.findall(r"(?:¥|￥)?\s*([0-9]+(?:\.[0-9]{1,2})?)\s*元?", text):
             try:
                 return float(match)
             except ValueError:
                 continue
         return 0.0
+
+    def _parse_receipt_detail_text(self, text: str):
+        """参考文章：从 ChatWnd 当前可见文本中提取收款详情。"""
+        clean = re.sub(r"\s+", " ", (text or "").strip())
+        if not clean:
+            return None
+
+        amount = self._extract_amount(clean)
+        sender = ""
+        timestamp = ""
+        remark = ""
+
+        sender_match = re.search(r"来自(.+?)(到账时间|收款时间|备注|收款方全称|$)", clean)
+        if sender_match:
+            sender = sender_match.group(1).strip()
+
+        time_match = re.search(r"(到账时间|收款时间)(.+?)(备注|收款方全称|$)", clean)
+        if time_match:
+            timestamp = time_match.group(2).strip()
+
+        remark_match = re.search(r"备注(.+?)(收款方全称|$)", clean)
+        if remark_match:
+            remark = remark_match.group(1).strip()
+
+        if amount <= 0 and not sender and not timestamp and not remark:
+            return None
+
+        return {
+            "amount": amount,
+            "payer": sender,
+            "time": timestamp,
+            "remark": remark,
+            "text": clean,
+        }
 
     def _detect_event(self, text: str):
         text = (text or "").strip()
@@ -307,6 +353,62 @@ class WeChatMonitor:
             "event_type": event_type or "receipt",
             "keyword": keyword or "",
         }
+
+    def _scan_chatwnd_receipt_details(self):
+        """参考 https://segmentfault.com/a/1190000044681099：递归解析 ChatWnd 文本。"""
+        results = []
+        try:
+            chat_wnd = auto.WindowControl(searchDepth=1, ClassName=self.CHATWND_CLASS)
+            if not chat_wnd or not chat_wnd.Exists(0):
+                return results
+
+            details = []
+
+            def explore(control, depth, target_depth):
+                try:
+                    name = (control.Name or "").strip()
+                    if name:
+                        parsed = None
+                        if depth == target_depth:
+                            parsed = self._parse_receipt_detail_text(name)
+                        elif "收款金额" in name or ("来自" in name and ("到账时间" in name or "收款时间" in name)):
+                            parsed = self._parse_receipt_detail_text(name)
+                        if parsed:
+                            details.append((control, parsed))
+                    for child in control.GetChildren():
+                        explore(child, depth + 4, target_depth)
+                except Exception:
+                    return
+
+            explore(chat_wnd, 0, 60)
+
+            seen = set()
+            for control, parsed in details:
+                signature = (
+                    parsed.get("amount", 0.0),
+                    parsed.get("payer", ""),
+                    parsed.get("time", ""),
+                    parsed.get("remark", ""),
+                )
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                results.append({
+                    "control": self._get_clickable_control(control),
+                    "text": parsed.get("text", ""),
+                    "chat_item": False,
+                    "chat_name": "微信支付",
+                    "payer": parsed.get("payer", ""),
+                    "remark": parsed.get("remark", ""),
+                    "amount": parsed.get("amount", 0.0),
+                    "event_type": "receipt",
+                    "keyword": "收款详情",
+                    "time": parsed.get("time", ""),
+                    "class_name": self.CHATWND_CLASS,
+                })
+        except Exception as e:
+            logger.debug("扫描ChatWnd收款详情失败: %s", e)
+        return results
 
     def _scan_visible_tree(self, wechat_window):
         """递归解析当前可见控件文本，仅保留已收款记录。"""
@@ -544,6 +646,7 @@ class WeChatMonitor:
                         self._last_window_refresh = now
 
                     all_results = []
+                    all_results.extend(self._scan_chatwnd_receipt_details())
                     all_results.extend(self._scan_session_cells())
                     if self._wechat_windows:
                         for win in self._wechat_windows:
