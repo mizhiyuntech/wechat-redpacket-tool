@@ -290,10 +290,15 @@ class WeChatMonitor:
             sender = sender.strip().strip('"')
             content = content.strip()
 
-        amount = self._extract_amount(content)
+        amount = self._extract_amount(name_block)
+        if amount <= 0:
+            amount = self._extract_amount(content)
         payer, remark = self._extract_sender_from_message(content)
         if sender and sender != "我":
             payer = sender
+
+        if not remark:
+            _, remark = self._extract_sender_from_message(name_block)
 
         return {
             "chat_name": session_name,
