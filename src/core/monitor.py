@@ -187,15 +187,19 @@ class WeChatMonitor:
 
     def _extract_amount(self, text: str) -> float:
         text = (text or "").strip()
-        match = re.search(r"收款金额[¥￥]?\s*([\d.]+)", text)
-        if match:
+        patterns = [
+            r"收款金额\s*[¥￥]?\s*([0-9]+(?:\.[0-9]{1,2})?)",
+            r"收款到账\s*([0-9]+(?:\.[0-9]{1,2})?)\s*元",
+            r"[¥￥]\s*([0-9]+(?:\.[0-9]{1,2})?)",
+            r"\b([0-9]+\.[0-9]{1,2})\b",
+            r"\b([0-9]+(?:\.[0-9]{1,2})?)\s*元\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
             try:
                 return float(match.group(1))
-            except ValueError:
-                pass
-        for match in re.findall(r"(?:¥|￥)?\s*([0-9]+(?:\.[0-9]{1,2})?)\s*元?", text):
-            try:
-                return float(match)
             except ValueError:
                 continue
         return 0.0
